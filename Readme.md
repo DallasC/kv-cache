@@ -20,6 +20,8 @@ RwLock<HashMap<K, Arc<Mutex<Value<V>>> >>
 ```
 RwLock is a `tokio::sync::RwLock` this provides us thread saftey by allowing many readers to access the HashMap at once but only at most 1 writer at a time. What this means for performance is that all threads can read at the same time but if you need to write (add, update, delete) only one thread can access at a time.
 
+>Note: It uses tokio but it would be asy to replace it with `async_std` RwLock if you are using that instead of tokio for an async runtime.
+
 We optimize this by wrapping the `Value<V>` in a `Arc<Mutex<>>`. What this allows us to do is a Read Lock can now clone the arc, release the readlock, aquire a lock on the mutex and make edits. This means that both (reads, update) can happen by many threads at once and only (add, delete) need slow Write Locks.
 
 `Value<V>` is a small wrapper around a value that adds an additional expiration time. We allow the users to clear all expired KV's from the Map. We do this first by aquiring a Read Lock and scanning the table for expired values (this doesn't lock out all threads since its not a write lock). We collect all the expired `Keys` into a new `Vec`. Then once done we aquire a Write Lock and delete the items. This adds some memory overhead but has the advantage of not having to hold an expensive Write Lock for the whole scan. 
@@ -29,3 +31,6 @@ Also, we don't automically delete expired values. This way was chosen so that th
 We return `Cloned` values in order to insure memory saftey between threads. This means if your `V` is a large expensive value we have to clone it each time you use `get()` or `get_with_expire()`. In this case I would recommend wrapping it in an `Arc` that way you only have to clone a refernce counter and not the entire value.
 
 As a last note everything is in `lib.rs`. normally i would seperate things but in this case the full the implementation is just `Value<V>` which is very small and the `Kv` implementation so everything fit nicely into one file.
+
+## Examples
+You can look at the test cases at the bottom of `lib.rs` to see how all the features can be used in action.
