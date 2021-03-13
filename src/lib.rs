@@ -129,3 +129,23 @@ impl<K, V> Kv<K, V> {
     }
 
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::Kv;
+
+    const KEY: i8 = 0;
+    const VALUE: &str = "VALUE";
+
+    #[tokio::test]
+    async fn set_and_get() {
+        let db = Kv::new();
+        db.set(KEY, VALUE).await;
+        let value = db.get(&KEY).await;
+        match value {
+            Some(value) => assert_eq!(value, VALUE),
+            None => panic!("value was not found in cache"),
+        };
+    }
+
+}
