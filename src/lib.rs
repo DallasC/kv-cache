@@ -199,6 +199,51 @@ impl<K, V> Kv<K, V> {
         }
     }
 
+    /// Removes a kv pair returning the value if removed otherwise none
+    pub async fn remove(&self, key: &K) -> Option<V>
+    where
+        K: Eq + Hash,
+        V: Clone
+    {
+        // Get a write lock and remove from database
+        self.items
+            .write()
+            .await
+            .remove(key)
+            .map(|v| v.lock().expect("mutex poisoned").value.clone())
+    }
+
+    /// Removes all the expired items in the cache
+    pub async fn remove_expired(&self)
+    where
+        K: Eq + Hash + Clone,
+    {
+
+        // Get a copy of the map with a read lock
+        let map = self.items.read().await;
+
+        // Clone keys that are expired
+        let expired_keys: Vec<K> = map
+            .iter()
+            .filter(|(_, item)| item.lock().expect("mutex poisoned").expired())
+            .map(|(k, _)| k.clone())
+            .collect();
+
+        //release read lock
+        drop(map);
+
+        // Get a write lock to remove expired keys
+        // This can be an expensive operation since it bocks for awhile
+        for key in expired_keys {
+            self.items.write().await.remove(&key);
+        }
+    }
+
+    /// Clear the KV store
+    pub async fn clear(&self) {
+        self.items.write().await.clear()
+    }
+
 
 }
 
@@ -206,6 +251,7 @@ impl<K, V> Kv<K, V> {
 mod tests {
     use crate::Kv;
     use std::time::Duration;
+    use tokio::time::sleep;
 
     const KEY: i8 = 0;
     const VALUE: &str = "VALUE";
@@ -257,6 +303,71 @@ mod tests {
             None => panic!("value was not found in cache"),
         };
     }
+
+    #[tokio::test]
+    async fn remove_item() {
+        let kv = Kv::new();
+        kv.set(KEY, VALUE).await;
+        if let None = kv.remove(&KEY).await {
+            panic!("none returned from removing existing value")
+        };
+        if kv.items.read().await.get(&KEY).is_some() {
+            panic!("found removed item in cache")
+        };
+    }
+
+    #[tokio::test]
+    async fn remove_return_none_if_not_found() {
+        let kv: Kv<i8, &str> = Kv::new();
+        if let Some(_) = kv.remove(&KEY).await {
+            panic!("non-existent value was returned from remove")
+        };
+    }
+
+    #[tokio::test]
+    async fn remove_expired_item() {
+        let kv = Kv::new();
+        kv.set_with_expire(KEY, VALUE, Duration::from_millis(50)).await;
+        sleep(Duration::from_secs(1)).await;
+        kv.remove_expired().await;
+        if kv.items.read().await.get(&KEY).is_some() {
+            panic!("found expired item in cache")
+        };
+    }
+
+    #[tokio::test]
+    async fn remove_only_expired_items() {
+        const NEW_KEY: i8 = 1;
+        let kv = Kv::new();
+        kv.set_with_expire(KEY, VALUE, Duration::from_millis(50)).await;
+        kv.set_with_expire(NEW_KEY, VALUE, Duration::from_secs(2)).await;
+        sleep(Duration::from_secs(1)).await;
+        kv.remove_expired().await;
+        if kv.items.read().await.get(&KEY).is_some() {
+            panic!("found expired item in cache")
+        };
+        if kv.items.read().await.get(&NEW_KEY).is_none() {
+            panic!("could not find, not expired item in cache")
+        };
+    }
+
+    #[tokio::test]
+    async fn clear_all_items() {
+        const NEW_KEY: i8 = 1;
+        let kv = Kv::new();
+        kv.set_with_expire(KEY, VALUE, Duration::from_millis(50)).await;
+        kv.set_with_expire(NEW_KEY, VALUE, Duration::from_secs(2)).await;
+        sleep(Duration::from_secs(1)).await;
+        kv.clear().await;
+        if kv.items.read().await.get(&KEY).is_some() {
+            panic!("found item in cache")
+        };
+        if kv.items.read().await.get(&NEW_KEY).is_some() {
+            panic!("found item in cache")
+        };
+    }
+
+
 
 
 
