@@ -128,11 +128,84 @@ impl<K, V> Kv<K, V> {
         }
     }
 
+    /// Like `get()` but returns Value struct with value and expiration time
+    pub async fn get_with_expire(&self, key: &K) -> Option<Value<V>>
+    where
+        K: Eq + Hash,
+        V: Clone,
+    {
+        // Get value using a ReadLock
+        let map = self.items.read().await;
+
+        // If some value extract it from mutex
+        // if not release the lock
+        if let Some(arc) = map.get(key) {
+            // Clone the Arc so we can release the rwlock.
+            let mutex = arc.clone();
+            drop(map);
+
+            // Clone value from the mutex and return it dropping the mutex lock
+            let clone = mutex.lock().expect("mutex poisoned").clone();
+            return Some(clone)
+        }
+        None
+    }
+
+    /// Like `set()` but allows to update or set a Duration until the item expires
+    /// Returns Value (both value and experation time)
+    pub async fn set_with_expire(&self, key: K, value: V, duration: Duration) -> Value<V>
+    where
+        K: Eq + Hash,
+        V: Clone,
+    {
+
+        // First we Check to see if the value already exists.
+        // This would prevent us from having to use a WriteLock,
+        // since we can update the mutex instead.
+
+        // Get value using a ReadLock
+        let map = self.items.read().await;
+
+        // If some value we update it
+        if let Some(arc) = map.get(&key) {
+            // Clone the Arc so we can release the rwlock.
+            let mutex = arc.clone();
+            drop(map);
+
+            // Lock the mutex so we can use it.
+            let mut old = mutex.lock().expect("mutex poisoned");
+
+            // Clone the old value to return
+            let clone = old.clone();
+
+            old.value = value;
+            old.expire = Some(Instant::now() + duration);
+
+            return clone
+        } else {
+            // Drop our read lock so we can get a write lock and add a new value
+            drop(map);
+            let insert = self.items
+                .write()
+                .await
+                .insert(
+                    key,
+                    Arc::new(Mutex::new(Value::new(value.clone(), Some(duration)))),
+                );
+            match insert {
+                None => Value::new(value, Some(duration)),
+                Some(v) => v.lock().expect("mutex posioned").clone(),
+            }
+        }
+    }
+
+
 }
 
 #[cfg(test)]
 mod tests {
     use crate::Kv;
+    use std::time::Duration;
 
     const KEY: i8 = 0;
     const VALUE: &str = "VALUE";
@@ -147,5 +220,17 @@ mod tests {
             None => panic!("value was not found in cache"),
         };
     }
+
+    #[tokio::test]
+    async fn set_and_get_with_expire() {
+        let db = Kv::new();
+        db.set_with_expire(KEY, VALUE, Duration::from_secs(2)).await;
+        let value = db.get_with_expire(&KEY).await;
+        match value {
+            Some(v) => assert_eq!(v.value, VALUE),
+            None => panic!("value was not found in cache"),
+        };
+    }
+
 
 }
