@@ -232,5 +232,32 @@ mod tests {
         };
     }
 
+    #[tokio::test]
+    async fn set_replace_existing_value() {
+        const NEW_VALUE: &str = "NEW_VALUE";
+        let kv = Kv::new();
+        kv.set(KEY, VALUE).await;
+        kv.set(KEY, NEW_VALUE).await;
+        let value = kv.get(&KEY).await;
+        match value {
+            Some(value) => assert_eq!(value, NEW_VALUE),
+            None => panic!("value was not found in cache"),
+        };
+    }
+
+    #[tokio::test]
+    async fn set_replace_existing_value_with_expire() {
+        const NEW_VALUE: &str = "NEW_VALUE";
+        let kv = Kv::new();
+        kv.set_with_expire(KEY, VALUE, Duration::from_secs(2)).await;
+        kv.set_with_expire(KEY, NEW_VALUE, Duration::from_secs(2)).await;
+        let value = kv.get_with_expire(&KEY).await;
+        match value {
+            Some(v) => assert_eq!(v.value, NEW_VALUE),
+            None => panic!("value was not found in cache"),
+        };
+    }
+
+
 
 }
